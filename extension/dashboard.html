@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Lighthouse Pro — Professional Website Audit</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></div><div><b>Lighthouse<span>Pro</span></b><small>WEB PERFORMANCE STUDIO</small></div></div>
+    <div class="side-label">میزکار آنالیز</div>
+    <a class="nav active" href="dashboard.html"><span class="nav-icon">◈</span> داشبورد Lighthouse</a>
+    <a class="nav" id="wptNav" href="https://www.webpagetest.org/lighthouse" target="_blank" rel="noopener"><span class="nav-icon">↗</span> WebPageTest</a>
+    <div class="sidebar-bottom">
+      <div class="agent-status"><span id="statusDot" class="status-dot"></span><div><strong id="agentStatus">بررسی اتصال...</strong><small>موتور Lighthouse محلی</small></div></div>
+      <p>آزمایش با مرورگر واقعی Chrome انجام می‌شود؛ نتایج آزمایشگاهی هستند، نه داده کاربران واقعی.</p>
+      <div class="side-links"><a href="https://developer.chrome.com/docs/lighthouse/" target="_blank" rel="noopener">راهنمای Lighthouse ↗</a></div>
+    </div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div class="breadcrumb">ابزارهای توسعه <span>/</span> گزارش تخصصی وب‌سایت</div><div class="top-brand">LIGHTHOUSE <b>PRO</b><span class="live-mark">LOCAL</span></div></header>
+    <div class="content">
+      <div class="hero"><div><div class="eyebrow"><span class="eyebrow-dot"></span> PROFESSIONAL WEBSITE PERFORMANCE AUDIT</div><h1>آنالیز تخصصی <em>وب‌سایت</em></h1><p>سرعت، سئو، دسترس‌پذیری و استانداردهای فنی را با موتور واقعی Google Lighthouse بررسی کنید.</p></div><div class="hero-glow" aria-hidden="true"><span>90</span><small>PERFORMANCE</small></div></div>
+      <section class="card control-card" aria-labelledby="auditHeading">
+        <div class="section-head"><div><div class="kicker">SCAN CONFIGURATION</div><h2 id="auditHeading">شروع ارزیابی</h2></div><div class="tech-badge">CHROME HEADLESS + LIGHTHOUSE</div></div>
+        <label class="input-label" for="urlInput">آدرس وب‌سایت</label>
+        <div class="control-row"><div class="url-wrap"><span class="url-icon">⌁</span><input id="urlInput" spellcheck="false" type="url" inputmode="url" placeholder="https://example.com" aria-label="آدرس وب‌سایت"></div><button class="run-button" id="runButton" type="button"><span id="runIcon">◈</span><span id="runLabel">اجرای آنالیز</span></button></div>
+        <div class="control-footer"><div class="segmented" role="group" aria-label="نمای تست"><button class="selected" data-mode="mobile" type="button">◉ موبایل</button><button data-mode="desktop" type="button">▣ دسکتاپ</button></div><div class="control-note">محیط شبیه‌سازی‌شده، اجرای بدون تغییر روی وب‌سایت</div></div>
+      </section>
+      <div id="notice" class="notice" role="status" aria-live="polite">برای آغاز، آدرس سایت را وارد کنید یا از آیکن اکستنشن روی صفحه موردنظر کلیک کنید.</div>
+      <div id="reportArea" hidden>
+        <section class="report-header"><div><div class="kicker">AUDIT OVERVIEW</div><h2>گزارش Lighthouse</h2><div id="reportMeta" class="muted">—</div></div><div class="report-actions"><button type="button" class="ghost-button" id="exportButton">↓ خروجی JSON</button><button type="button" class="primary-light" id="htmlButton">↗ گزارش کامل HTML</button></div></section>
+        <div id="scores" class="score-grid" aria-label="امتیازهای ارزیابی"></div>
+        <div class="detail-grid">
+          <section class="card vitals-card"><div class="section-head"><div><div class="kicker">LAB METRICS</div><h2>معیارهای عملکرد</h2></div><span class="pill">Lab data</span></div><div id="vitals" class="vitals"></div><div class="metric-footnote">TBT شاخص آزمایشگاهی مسدودشدن رشته اصلی است و جایگزین INP کاربران واقعی نیست.</div></section>
+          <section class="card insights-card"><div class="section-head"><div><div class="kicker">OPPORTUNITIES & DIAGNOSTICS</div><h2>اولویت‌های فنی</h2></div><span id="issueCount" class="pill">—</span></div><div id="insights" class="insights"></div></section>
+        </div>
+      </div>
+      <section class="card history-card"><div class="section-head"><div><div class="kicker">RECENT AUDITS</div><h2>تاریخچه بررسی‌ها</h2></div><button type="button" id="clearHistory" class="subtle-button">پاک‌کردن تاریخچه</button></div><div id="history" class="history-empty">هنوز گزارشی ثبت نشده است.</div></section>
+      <footer class="footer"><span>REDCOWEB / Lighthouse Pro</span><span>Local-first • No API key • Chrome Extension MV3</span></footer>
+    </div>
+  </main>
+</div>
+<script src="dashboard.js"></script>
+</body>
+</html>
