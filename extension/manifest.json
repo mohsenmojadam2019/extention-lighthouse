@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Lighthouse Pro | Professional Website Audit",
+  "version": "1.0.0",
+  "description": "One click real Lighthouse audits, Core Web Vitals, technical fixes and WebPageTest.",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["http://127.0.0.1:4177/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Analyze with Lighthouse Pro" }
+}
