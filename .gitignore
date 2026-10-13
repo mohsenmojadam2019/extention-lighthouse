@@ -1,0 +1,6 @@
+node_modules/
+agent/node_modules/
+agent/reports/
+agent/.cache/
+.DS_Store
+*.log
