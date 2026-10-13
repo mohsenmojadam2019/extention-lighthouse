@@ -1,0 +1,16 @@
+{
+  "name": "lighthouse-pro-local-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Chrome Lighthouse audit bridge for Chrome extension",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "lighthouse": "12.8.2",
+    "chrome-launcher": "1.2.1"
+  }
+}
