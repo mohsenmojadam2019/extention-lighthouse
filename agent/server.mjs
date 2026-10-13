@@ -1,134 +1,149 @@
 import http from 'node:http';
-import {mkdir,writeFile,readFile,readdir,unlink} from 'node:fs/promises';
+import {readFile, writeFile, mkdir} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import lighthouse from 'lighthouse';
 import * as chromeLauncher from 'chrome-launcher';
-import {validateUrl,summarize} from './normalize.mjs';
+import {normalizeTarget, buildSummary, pickReports} from './utils.mjs';
 
 const HOST = '127.0.0.1';
-const PORT = Number(process.env.LIGHTHOUSE_PORT || 4177);
-const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'reports');
-const ALLOW_ORIGIN = /^chrome-extension:\/\/[a-p]{32}$/;
-const CATEGORIES = ['performance','accessibility','best-practices','seo'];
-let busy = false;
-await mkdir(DIR,{recursive:true});
+const PORT = 4177;
+const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), 'reports');
+const INDEX = path.join(DATA,'history.json');
+const jobs = new Map();
+let records = [];
+let activeId = null;
+await mkdir(DATA, {recursive:true});
+try { records = JSON.parse(await readFile(INDEX,'utf8')); } catch { records = []; }
+if (!Array.isArray(records)) records = [];
 
-function allowed(req) {
-  const origin = req.headers.origin;
-  return !origin || ALLOW_ORIGIN.test(origin);
-}
-function cors(req,res) {
-  const origin=req.headers.origin;
-  if (origin && ALLOW_ORIGIN.test(origin)) {
-    res.setHeader('Access-Control-Allow-Origin',origin);
-    res.setHeader('Vary','Origin');
-    res.setHeader('Access-Control-Allow-Methods','GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers','Content-Type');
-  }
+function allowedOrigin(origin) { return !origin || /^chrome-extension:\/\/[a-p]{32}$/.test(origin); }
+function headers(res, origin) {
   res.setHeader('X-Content-Type-Options','nosniff');
   res.setHeader('Cache-Control','no-store');
-}
-function json(res,status,body) {
-  res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});
-  res.end(JSON.stringify(body));
-}
-async function bodyJson(req) {
-  if (!(req.headers['content-type'] || '').startsWith('application/json')) {
-    throw new Error('Expected application/json');
-  }
-  const parts=[];let bytes=0;
-  for await(const part of req) {
-    bytes+=part.length;
-    if(bytes>16384) throw new Error('Request too large');
-    parts.push(part);
-  }
-  return JSON.parse(Buffer.concat(parts).toString('utf8'));
-}
-async function trimReports(max=24) {
-  const files=(await readdir(DIR)).filter(x=>x.endsWith('.html'));
-  if(files.length<=max)return;
-  const dated=await Promise.all(files.map(async name=>({
-    name, stat:await import('node:fs/promises').then(fs=>fs.stat(path.join(DIR,name)))
-  })));
-  dated.sort((a,b)=>b.stat.mtimeMs-a.stat.mtimeMs);
-  for(const f of dated.slice(max)) {
-    await Promise.allSettled([
-      unlink(path.join(DIR,f.name)),
-      unlink(path.join(DIR,f.name.replace(/\.html$/,'.json')))
-    ]);
+  if (origin && allowedOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin',origin);
+    res.setHeader('Vary','Origin');
+    res.setHeader('Access-Control-Allow-Headers','Content-Type');
+    res.setHeader('Access-Control-Allow-Methods','GET, POST, OPTIONS');
   }
 }
-async function runAudit(url,strategy) {
+function send(res, code, data) {
+  res.statusCode=code;
+  res.setHeader('Content-Type','application/json; charset=utf-8');
+  res.end(JSON.stringify(data));
+}
+function fail(res, code, message) { send(res,code,{error:message}); }
+async function bodyJSON(req) {
+  let size=0; const chunks=[];
+  for await (const chunk of req) {
+    size+=chunk.length;
+    if (size>16384) throw new Error('Request too large');
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+async function saveHistory(record) {
+  records = [record, ...records.filter(r=>r.id!==record.id)].slice(0,30);
+  await writeFile(INDEX, JSON.stringify(records,null,2));
+}
+async function runAudit(job) {
+  activeId=job.id;
   let chrome;
   try {
+    job.status='running';
+    job.stage='Launching isolated headless Chrome';
     chrome=await chromeLauncher.launch({
-      chromeFlags:['--headless=new','--disable-extensions','--no-first-run','--no-default-browser-check']
+      chromeFlags:['--headless=new','--no-first-run','--no-default-browser-check','--disable-dev-shm-usage','--disable-extensions'],
     });
-    const results=await lighthouse(url,{
-      port:chrome.port,
-      logLevel:'error',
-      output:'html',
-      onlyCategories:CATEGORIES,
-      ...(strategy==='desktop'?{preset:'desktop'}:{}),
-      maxWaitForLoad:45000
-    });
-    if(!results?.lhr) throw new Error('Lighthouse produced no result');
-    const lhr=results.lhr;
-    if(lhr.runtimeError) throw new Error(lhr.runtimeError.message||'Page could not be audited');
-    const id=randomUUID();
-    const html=Array.isArray(results.report)?results.report[0]:results.report;
+    job.stage='Auditing page with Lighthouse';
+    const flags={
+      port:chrome.port,output:['html','json'],logLevel:'error',
+      onlyCategories:['performance','accessibility','best-practices','seo'],
+      formFactor:job.formFactor,
+    };
+    if (job.formFactor==='desktop') {
+      flags.screenEmulation={mobile:false,width:1350,height:940,deviceScaleFactor:1,disabled:false};
+    }
+    const result=await lighthouse(job.url,flags);
+    if (!result?.lhr) throw new Error('Lighthouse returned no results.');
+    if (result.lhr.runtimeError) throw new Error(result.lhr.runtimeError.message || 'Lighthouse runtime error.');
+    const summary=buildSummary(result.lhr,job.url,job.formFactor,job.id);
+    const picked=pickReports(result.report);
+    const html=picked.html;
+    const json=picked.json || JSON.stringify(result.lhr);
+    if (!html) throw new Error('Lighthouse HTML report is missing.');
     await Promise.all([
-      writeFile(path.join(DIR,id+'.html'),html,'utf8'),
-      writeFile(path.join(DIR,id+'.json'),JSON.stringify(lhr),'utf8')
+      writeFile(path.join(DATA,job.id+'.html'),html),
+      writeFile(path.join(DATA,job.id+'.json'),json),
+      writeFile(path.join(DATA,job.id+'.summary.json'),JSON.stringify(summary)),
     ]);
-    trimReports().catch(()=>{});
-    return {id,...summarize(lhr,strategy)};
+    job.status='complete';job.stage='Finished';job.summary=summary;job.completedAt=new Date().toISOString();
+    await saveHistory({id:job.id,url:job.url,formFactor:job.formFactor,generatedAt:summary.generatedAt,scores:summary.scores});
+  } catch(e) {
+    job.status='error';job.stage='Failed';job.error=String(e?.message||e);
+    console.error('[audit]',job.id,job.error);
   } finally {
-    if(chrome) await chrome.kill().catch(()=>{});
+    if(chrome) try {await chrome.kill();} catch(e) {console.warn('Chrome cleanup:',e.message);}
+    activeId=null;
   }
 }
-const server=http.createServer(async(req,res)=>{
-  cors(req,res);
-  if(!allowed(req))return json(res,403,{error:'Access denied for this origin.'});
-  const pathname=new URL(req.url||'/', 'http://localhost').pathname;
-  if(req.method==='OPTIONS'){res.writeHead(204);return res.end();}
-  if(req.method==='GET' && pathname==='/health')return json(res,200,{
-    ok:true,engine:'Local Lighthouse + headless Chrome',version:'1.0.0',busy
-  });
-  if(req.method==='GET' && /^\/api\/reports\/[a-f0-9-]{36}\.(html|json)$/.test(pathname)){
-    try {
-      const name=pathname.split('/').at(-1);
-      const data=await readFile(path.join(DIR,name));
-      res.writeHead(200,{
-        'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':'application/json; charset=utf-8',
-        'Content-Disposition':'attachment; filename="lighthouse-'+name+'"'
-      });
-      return res.end(data);
-    }catch{return json(res,404,{error:'Report not found'});}
+const ID=/^[0-9a-f]{8}-[0-9a-f-]{27,36}$/i;
+const server=http.createServer(async (req,res)=>{
+  const origin=req.headers.origin || '';
+  headers(res,origin);
+  if(!allowedOrigin(origin)) return fail(res,403,'Only the installed Chrome extension can access this agent.');
+  if(req.method==='OPTIONS') {res.statusCode=204;res.end();return;}
+  let pathname;
+  try {pathname=new URL(req.url,'http://127.0.0.1').pathname;} catch {return fail(res,400,'Bad URL');}
+  try {
+    if(req.method==='GET' && (pathname==='/health'||pathname==='/api/health')) {
+      return send(res,200,{ok:true,name:'Lighthouse Pro',version:'1.0.0',engine:'Google Lighthouse',busy:activeId!==null,local:true});
+    }
+    if(req.method==='GET' && pathname==='/api/history') {
+      return send(res,200,{history:records});
+    }
+    if(req.method==='POST' && pathname==='/api/audits') {
+      if(!String(req.headers['content-type']||'').startsWith('application/json'))return fail(res,415,'JSON required.');
+      if(activeId) return fail(res,409,'An audit is already running. Please wait.');
+      const params=await bodyJSON(req);
+      const url=normalizeTarget(params.url);
+      const formFactor=params.formFactor==='desktop'?'desktop':'mobile';
+      const id=randomUUID();
+      const job={id,url,formFactor,status:'queued',stage:'Waiting',createdAt:new Date().toISOString()};
+      jobs.set(id,job);
+      send(res,202,{id,status:job.status});
+      setImmediate(()=>runAudit(job));
+      return;
+    }
+    const matches=pathname.match(/^\/api\/audits\/([0-9a-f-]+)$/i);
+    if(req.method==='GET' && matches && ID.test(matches[1])) {
+      const job=jobs.get(matches[1]);
+      if (job) return send(res,200,job);
+      const record=records.find(r=>r.id===matches[1]);
+      if (!record) return fail(res,404,'Audit not found.');
+      const summary=JSON.parse(await readFile(path.join(DATA,record.id+'.summary.json'),'utf8'));
+      return send(res,200,{id:record.id,status:'complete',summary});
+    }
+    const report=pathname.match(/^\/api\/reports\/([0-9a-f-]+)\/(html|json)$/i);
+    if(req.method==='GET' && report && ID.test(report[1])) {
+      const [_,id,format]=report;
+      if(!records.some(r=>r.id===id))return fail(res,404,'Report not found.');
+      const file=path.join(DATA,id+'.'+format);
+      if(!existsSync(file))return fail(res,404,'Report not found.');
+      res.statusCode=200;
+      res.setHeader('Content-Type',format==='html'?'text/html; charset=utf-8':'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition','attachment; filename="lighthouse-'+id+'.'+format+'"');
+      res.end(await readFile(file));
+      return;
+    }
+    fail(res,404,'Route not found.');
+  } catch (e) {
+    console.error('[request]',e.message);
+    fail(res,400,String(e.message||e));
   }
-  if(req.method==='POST' && pathname==='/api/audit'){
-    if(busy)return json(res,409,{error:'Another audit is running. Wait for it to finish.'});
-    let data,url,strategy;
-    try{
-      data=await bodyJson(req);
-      url=validateUrl(data.url);
-      strategy=data.strategy==='desktop'?'desktop':'mobile';
-    }catch(e){return json(res,400,{error:e.message});}
-    busy=true;
-    try {
-      const result=await runAudit(url,strategy);
-      return json(res,200,result);
-    }catch(e){
-      console.error('Lighthouse audit failed:',e);
-      return json(res,500,{error:String(e.message||e).slice(0,700)});
-    }finally{busy=false;}
-  }
-  return json(res,404,{error:'Not found'});
 });
-server.requestTimeout=180_000;
-server.listen(PORT,HOST,()=>{
-  console.log('Lighthouse Pro agent ready at http://'+HOST+':'+PORT);
-  console.log('Chrome extension can start real mobile and desktop Lighthouse audits.');
-});
+server.requestTimeout=180000;
+server.listen(PORT,HOST,()=>console.log('Lighthouse Pro running at http://'+HOST+':'+PORT+'/health'));

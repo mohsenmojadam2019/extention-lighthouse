@@ -1,186 +1,144 @@
-'use strict';
-const API='http://127.0.0.1:4177';
-const $=id=>document.getElementById(id);
-let mode='mobile',running=false,lastReport=null;
-const qs=new URLSearchParams(location.search);
-const startingUrl=qs.get('url')||'';
-$('urlInput').value=startingUrl;
-
-function tone(n) {return n==null?'#a9b5c7':n>=90?'#11af89':n>=50?'#efb04a':'#e65c6c';}
-function scoreText(n){return n===null||n===undefined?'—':String(n);}
-function el(tag,className,textValue){
-  const node=document.createElement(tag);
-  if(className)node.className=className;
-  if(textValue!==undefined)node.textContent=textValue;
-  return node;
-}
-function setNotice(message,kind=''){
-  $('notice').textContent=message;
-  $('notice').className='notice '+kind;
-}
-function setBusy(value){
-  running=value;
-  $('runButton').disabled=value;
-  $('runLabel').textContent=value?'در حال ارزیابی...':'اجرای آنالیز';
-  $('runIcon').textContent=value?'◌':'◈';
-}
-async function checkAgent(){
-  try{
-    const response=await fetch(API+'/health',{cache:'no-store',signal:AbortSignal.timeout(3500)});
-    if(!response.ok)throw Error('Unavailable');
-    $('agentStatus').textContent='موتور متصل و آماده';
-    $('statusDot').className='status-dot online';
-    return true;
-  }catch{
-    $('agentStatus').textContent='سرویس محلی خاموش';
-    $('statusDot').className='status-dot offline';
-    return false;
+(() => {
+  'use strict';
+  const API = 'http://127.0.0.1:4177';
+  const $ = id => document.getElementById(id);
+  const form = $('audit-form'), input = $('url'), button = $('run-button');
+  const msg = $('message'), loading = $('loading'), results = $('results');
+  const categoryLabels = {'performance':'عملکرد و سرعت','accessibility':'دسترس‌پذیری','best-practices':'بهترین شیوه‌ها','seo':'سئو'};
+  const scoreLabels = {'performance':'Performance','accessibility':'Accessibility','best-practices':'Best Practices','seo':'SEO'};
+  const metricNames = {lcp:'Largest Contentful Paint',fcp:'First Contentful Paint',cls:'Cumulative Layout Shift',tbt:'Total Blocking Time',si:'Speed Index'};
+  const metricFa = {lcp:'بارگذاری محتوای اصلی',fcp:'اولین نمایش محتوا',cls:'ثبات چیدمان',tbt:'زمان انسداد پردازش',si:'سرعت نمایش'};
+  let selectedIssue = 'performance', latest = null, running = false;
+  function html(text) {return String(text??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+  function normalizeDescription(text) {
+    return String(text||'').replace(/!\[([^\]]*)\]\([^)]+\)/g,'$1').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/<[^>]*>/g,'').replace(/[\`*_]/g,'').slice(0,420);
   }
-}
-function hostOf(url){
-  try{return new URL(url).host;}catch{return url;}
-}
-function cardScore(key,label,subtitle,value) {
-  const card=el('div','score-card');
-  const ring=el('div','score-ring');
-  ring.style.setProperty('--tone',tone(value));
-  ring.style.setProperty('--pct',value??0);
-  const circle=el('div','score-inner',scoreText(value));
-  ring.appendChild(circle);
-  const details=el('div');
-  details.append(el('div','score-title',label),el('div','score-desc',subtitle));
-  details.appendChild(el('div','score-label',value==null?'بدون داده':value>=90?'خوب':value>=50?'نیازمند بهبود':'ضعیف'));
-  card.append(ring,details);
-  return card;
-}
-const categoryNames=[
-  ['performance','عملکرد','PERFORMANCE'],
-  ['accessibility','دسترس‌پذیری','ACCESSIBILITY'],
-  ['bestPractices','استانداردها','BEST PRACTICES'],
-  ['seo','سئو فنی','SEO']
-];
-const metricNames=[
-  ['lcp','Largest Contentful Paint','LCP'],
-  ['fcp','First Contentful Paint','FCP'],
-  ['tbt','Total Blocking Time','TBT'],
-  ['cls','Cumulative Layout Shift','CLS'],
-  ['si','Speed Index','SI']
-];
-function renderReport(report){
-  lastReport=report;
-  $('reportArea').hidden=false;
-  $('reportMeta').textContent=hostOf(report.url)+'  /  '+(report.strategy==='mobile'?'Mobile':'Desktop')+
-    '  /  '+new Date(report.testedAt).toLocaleString('fa-IR')+'  /  Lighthouse '+(report.version||'');
-  const scores=$('scores');scores.replaceChildren();
-  for(const [key,label,subtitle] of categoryNames)scores.appendChild(cardScore(key,label,subtitle,report.scores?.[key]));
-  const vitals=$('vitals');vitals.replaceChildren();
-  for(const [key,name,short] of metricNames){
-    const m=report.vitals?.[key]||{};
-    const row=el('div','vital');const info=el('div','vital-info');
-    const dot=el('span','vital-dot');dot.style.setProperty('--tone',tone(m.score==null?null:Math.round(m.score*100)));
-    const label=el('div');
-    label.append(el('div','vital-name',short),el('div','vital-help',name));
-    info.append(dot,label);
-    row.append(info,el('div','vital-value',m.label||'—'));
-    vitals.appendChild(row);
+  function showMessage(message,type='error') {
+    msg.textContent=message;msg.className='notification'+(type==='ok'?' ok':'');msg.hidden=false;
   }
-  const issues=$('insights');issues.replaceChildren();
-  const diagnostics=Array.isArray(report.diagnostics)?report.diagnostics:[];
-  $('issueCount').textContent=diagnostics.length+' مورد';
-  if(!diagnostics.length)issues.appendChild(el('div','no-insights','فرصت بهبود امتیازدار دیگری در خروجی این اجرا شناسایی نشد. گزارش کامل را برای جزئیات بیشتر باز کنید.'));
-  for(const item of diagnostics){
-    const row=el('div','insight');
-    row.appendChild(el('div','severity','!'));
-    const body=el('div','insight-body');
-    body.append(el('div','insight-title',item.title),el('div','insight-description',item.description||'برای جزئیات به گزارش کامل مراجعه کنید.'));
-    row.appendChild(body);
-    if(item.savingsMs>0)row.appendChild(el('div','insight-save','~'+Math.round(item.savingsMs)+' ms'));
-    else if(item.detail)row.appendChild(el('div','insight-save',item.detail));
-    issues.appendChild(row);
+  function clearMessage() {msg.hidden=true;}
+  function setLoading(active) {running=active;loading.hidden=!active;button.disabled=active;button.querySelector('span').textContent=active?'در حال تحلیل':'شروع تحلیل';}
+  async function fetchJson(route,options) {
+    const res=await fetch(API+route,{...options,cache:'no-store'});
+    const data=await res.json();
+    if(!res.ok)throw new Error(data.error||('HTTP '+res.status));
+    return data;
   }
-}
-async function saveHistory(report){
-  const old=(await chrome.storage.local.get('audits')).audits||[];
-  const clean=Array.isArray(old)?old:[];
-  clean.unshift(report);
-  await chrome.storage.local.set({audits:clean.slice(0,15)});
-  renderHistory();
-}
-async function renderHistory(){
-  const list=$('history');list.replaceChildren();
-  const audits=(await chrome.storage.local.get('audits')).audits||[];
-  if(!audits.length){list.appendChild(el('div','history-empty','هنوز گزارشی ثبت نشده است.'));return;}
-  for(const report of audits){
-    const row=el('div','history-row');
-    row.appendChild(el('div','history-host',hostOf(report.url)));
-    row.appendChild(el('div','history-date',new Date(report.testedAt).toLocaleString('fa-IR')+' / '+report.strategy));
-    const pill=el('div','history-score','P '+scoreText(report.scores?.performance));
-    pill.style.setProperty('--tone',tone(report.scores?.performance));
-    row.appendChild(pill);
-    const button=el('button','history-open','نمایش');
-    button.type='button';
-    button.addEventListener('click',()=>{
-      renderReport(report);
-      $('reportArea').scrollIntoView({behavior:'smooth',block:'start'});
-    });
-    row.appendChild(button);list.appendChild(row);
+  async function checkAgent() {
+    try {
+      const state=await fetchJson('/api/health');
+      $('agent-state').className='agent-state online';
+      $('agent-state').querySelector('span').textContent='موتور Lighthouse متصل';
+      return state.ok;
+    } catch (_) {
+      $('agent-state').className='agent-state offline';
+      $('agent-state').querySelector('span').textContent='سرویس محلی خاموش است';
+      showMessage('موتور Lighthouse اجرا نشده. فایل scripts/start-agent.cmd را از پوشه پروژه اجرا کنید؛ سپس دوباره «شروع تحلیل» را بزنید.');
+      return false;
+    }
   }
-}
-function reportUrl(ext){
-  if(!lastReport?.id)return null;
-  return API+'/api/reports/'+lastReport.id+'.'+ext;
-}
-$('htmlButton').addEventListener('click',()=>{
-  const url=reportUrl('html');if(url)chrome.tabs.create({url});
-});
-$('exportButton').addEventListener('click',()=>{
-  const url=reportUrl('json');if(url)chrome.tabs.create({url});
-});
-$('clearHistory').addEventListener('click',async()=>{
-  await chrome.storage.local.remove('audits');
-  await renderHistory();
-});
-for(const button of document.querySelectorAll('[data-mode]')){
-  button.addEventListener('click',()=>{
-    mode=button.dataset.mode;
-    for(const btn of document.querySelectorAll('[data-mode]'))btn.classList.toggle('selected',btn.dataset.mode===mode);
+  function scoreClass(n){return n===null?'mid':n>=90?'good':n>=50?'mid':'poor';}
+  function metricClass(key,value) {
+    if(value===null || value===undefined) return 'mid';
+    const bounds={lcp:[2500,4000],fcp:[1800,3000],cls:[.1,.25],tbt:[200,600],si:[3400,5800]};
+    const [good,poor]=bounds[key]||[2500,4000];
+    return value<=good?'good':value<=poor?'mid':'poor';
+  }
+  function formatSavings(issue) {
+    if(issue.savingsMs>0)return '− '+issue.savingsMs.toLocaleString('en-US')+' ms';
+    if(issue.savingsBytes>0)return '− '+Math.round(issue.savingsBytes/1024).toLocaleString('en-US')+' KB';
+    return '';
+  }
+  function issueHtml(item) {
+    const saving=formatSavings(item);
+    return '<article class="issue-row"><div class="issue-top"><strong>'+html(item.title)+'</strong><span class="issue-saving">'+html(saving||((item.score??0)+' / 100'))+'</span></div>'+
+      (item.displayValue?'<span class="issue-score">'+html(item.displayValue)+'</span>':'')+
+      '<p>'+html(normalizeDescription(item.description)||'برای رفع این مشکل، گزارش کامل Lighthouse را مطالعه کنید.')+'</p></article>';
+  }
+  function showIssues() {
+    if(!latest)return;
+    const items=latest.checks?.[selectedIssue]||[];
+    $('issues').innerHTML=items.length?items.map(issueHtml).join(''):'<p class="empty">مشکل قابل‌توجهی در این بخش شناسایی نشد.</p>';
+    $('issue-count').textContent=items.length.toLocaleString('fa-IR')+' مورد';
+    for(const b of $('category-tabs').querySelectorAll('button'))b.classList.toggle('active',b.dataset.category===selectedIssue);
+  }
+  function drawResult(report) {
+    latest=report;
+    loading.hidden=true;results.hidden=false;clearMessage();setLoading(false);
+    $('result-url').textContent=report.finalUrl||report.url;
+    const id=encodeURIComponent(report.id);
+    $('download-html').href=API+'/api/reports/'+id+'/html';
+    $('download-json').href=API+'/api/reports/'+id+'/json';
+    $('wpt-link').href='https://www.webpagetest.org/';
+    $('psi-link').href='https://pagespeed.web.dev/analysis?url='+encodeURIComponent(report.finalUrl||report.url);
+    $('scores').innerHTML=Object.keys(scoreLabels).map(k=>{
+      const val=report.scores?.[k]??null, css=scoreClass(val);
+      return '<article class="score-card '+css+'"><div class="score-ring" style="--degree:'+(val===null?0:val*3.6)+'deg"><span>'+(val===null?'—':val)+'</span></div><h3>'+scoreLabels[k]+'</h3><p>'+categoryLabels[k]+'</p></article>';
+    }).join('');
+    $('metrics').innerHTML=Object.keys(metricNames).map(k=>{
+      const item=report.metrics?.[k],css=metricClass(k,item?.value??null);
+      return '<article class="metric-card"><span class="metric-abbr">'+k.toUpperCase()+'</span><div class="metric-value '+css+'">'+html(item?.display||'—')+'</div><div class="metric-title">'+metricFa[k]+'</div></article>';
+    }).join('');
+    const opportunities=report.opportunities||[];
+    $('opportunity-count').textContent=opportunities.length.toLocaleString('fa-IR')+' مورد';
+    $('opportunities').innerHTML=opportunities.length?opportunities.map(issueHtml).join(''):'<p class="empty">فرصت بهبود قابل‌اندازه‌گیری مهمی گزارش نشده است.</p>';
+    $('category-tabs').innerHTML=Object.keys(categoryLabels).map(k=>'<button type="button" data-category="'+k+'" class="'+(k===selectedIssue?'active':'')+'">'+categoryLabels[k]+'</button>').join('');
+    $('category-tabs').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{selectedIssue=b.dataset.category;showIssues();}));
+    showIssues();
+    results.scrollIntoView({behavior:'smooth',block:'start'});
+  }
+  async function loadHistory() {
+    try {
+      const data=await fetchJson('/api/history');
+      const rows=data.history||[];
+      $('history').innerHTML=rows.length?rows.map(r=>
+        '<button type="button" class="history-item" data-id="'+html(r.id)+'"><span><span class="history-url">'+html(r.url)+'</span><small>'+html(r.formFactor==='mobile'?'موبایل':'دسکتاپ')+' · '+html(new Date(r.generatedAt).toLocaleString('fa-IR'))+'</small></span><span class="history-scores">'+
+        ['performance','accessibility','best-practices','seo'].map(k=>'<span>'+html(r.scores?.[k]??'—')+'</span>').join('')+'</span></button>'
+      ).join(''):'<p class="muted">هنوز گزارشی ثبت نشده است.</p>';
+      $('history').querySelectorAll('button[data-id]').forEach(b=>b.addEventListener('click',async ()=>{
+        try {const j=await fetchJson('/api/audits/'+encodeURIComponent(b.dataset.id));if(j.summary)drawResult(j.summary);}
+        catch(e){showMessage('بازیابی گزارش ناموفق بود: '+e.message);}
+      }));
+    }catch(_){/* agent offline */}
+  }
+  async function poll(id) {
+    for(let attempt=0;attempt<150;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,1500));
+      const job=await fetchJson('/api/audits/'+encodeURIComponent(id));
+      $('progress-text').textContent=job.stage||'Lighthouse در حال اندازه‌گیری…';
+      if(job.status==='complete'){drawResult(job.summary);await loadHistory();return;}
+      if(job.status==='error')throw new Error(job.error||'ممیزی Lighthouse ناموفق بود.');
+    }
+    throw new Error('تحلیل بیش از حد طول کشید. وضعیت سرویس محلی را بررسی کنید.');
+  }
+  async function runAudit() {
+    if(running)return;
+    const url=input.value.trim();
+    let parsed;
+    try{parsed=new URL(url);if(!['http:','https:'].includes(parsed.protocol))throw Error();}catch{showMessage('آدرس کامل وب‌سایت را با https:// یا http:// وارد کنید.');return;}
+    clearMessage();
+    const connected=await checkAgent();
+    if(!connected)return;
+    setLoading(true);results.hidden=true;
+    $('progress-text').textContent='در حال شروع ممیزی واقعی…';
+    try{
+      const formFactor=form.querySelector('input[name="device"]:checked').value;
+      const job=await fetchJson('/api/audits',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,formFactor})});
+      await poll(job.id);
+    }catch(e){setLoading(false);showMessage('خطا در اجرای Lighthouse: '+e.message);}
+  }
+  form.addEventListener('submit',e=>{e.preventDefault();runAudit();});
+  $('copy-summary').addEventListener('click',async()=>{
+    if(!latest)return;
+    const s=latest;
+    const text=['Lighthouse Pro — '+s.finalUrl,'Mode: '+s.formFactor,
+      ...Object.keys(scoreLabels).map(k=>scoreLabels[k]+': '+(s.scores[k]??'N/A')),
+      ...Object.keys(metricNames).map(k=>k.toUpperCase()+': '+(s.metrics?.[k]?.display||'N/A')),
+      'INP: Not available (field data required)',
+      ...s.opportunities.slice(0,5).map(x=>'Fix: '+x.title+' ('+formatSavings(x)+')')].join('\n');
+    try{await navigator.clipboard.writeText(text);showMessage('خلاصه گزارش در کلیپ‌بورد کپی شد.','ok');}catch(e){showMessage('کپی انجام نشد: '+e.message);}
   });
-}
-async function startAudit(){
-  if(running)return;
-  const input=$('urlInput').value.trim();
-  let url;
-  try{
-    url=new URL(input);
-    if(!['https:','http:'].includes(url.protocol)||url.username||url.password)throw Error();
-  }catch{
-    setNotice('لطفاً آدرس کامل وب‌سایت را با https:// یا http:// وارد کنید.','error');return;
-  }
-  if(!(await checkAgent())){
-    setNotice('سرویس محلی Lighthouse اجرا نشده است. در پوشه پروژه فایل scripts/start-agent.cmd را اجرا کنید و این صفحه را دوباره باز کنید.','error');return;
-  }
-  setBusy(true);
-  setNotice('Chrome در حال اجرای ارزیابی واقعی '+(mode==='mobile'?'موبایل':'دسکتاپ')+' است. این مرحله معمولاً بین ۳۰ تا ۹۰ ثانیه طول می‌کشد.','loading');
-  try {
-    const response=await fetch(API+'/api/audit',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({url:url.toString(),strategy:mode}),
-      signal:AbortSignal.timeout(180_000)
-    });
-    let result;
-    try{result=await response.json();}catch{throw Error('Response could not be parsed');}
-    if(!response.ok)throw Error(result.error||'Lighthouse failed');
-    renderReport(result);
-    await saveHistory(result);
-    setNotice('ارزیابی واقعی با موفقیت انجام شد. برای همه جزئیات و شواهد، گزارش کامل HTML را باز کنید.','success');
-    $('reportArea').scrollIntoView({behavior:'smooth',block:'start'});
-  }catch(e){
-    const message=e.name==='TimeoutError'?'زمان تست تمام شد. اتصال، سرعت سایت و سرویس محلی را بررسی کنید.':e.message;
-    setNotice('ارزیابی ناموفق بود: '+message,'error');
-  }finally{setBusy(false);checkAgent();}
-}
-$('runButton').addEventListener('click',startAudit);
-$('urlInput').addEventListener('keydown',e=>{if(e.key==='Enter')startAudit();});
-checkAgent();
-renderHistory().catch(()=>{});
-if(startingUrl && /^https?:\/\//i.test(startingUrl))window.setTimeout(startAudit,300);
+  const fromTab=new URLSearchParams(location.search).get('url');
+  if(fromTab&&/^https?:\/\//i.test(fromTab))input.value=fromTab;
+  (async()=>{const connected=await checkAgent();if(connected){await loadHistory();if(input.value)await runAudit();}})();
+})();

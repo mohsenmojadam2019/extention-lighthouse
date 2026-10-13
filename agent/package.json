@@ -3,14 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Local Chrome Lighthouse audit bridge for Chrome extension",
-  "engines": { "node": ">=22.0.0" },
+  "description": "Local, isolated real Lighthouse audits for Chrome Extension",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node tests.mjs"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "dependencies": {
-    "lighthouse": "12.8.2",
-    "chrome-launcher": "1.2.1"
+    "chrome-launcher": "^1.2.0",
+    "lighthouse": "^12.6.0"
   }
 }
